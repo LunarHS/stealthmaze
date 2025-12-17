@@ -235,87 +235,122 @@
       const scoreEl = document.getElementById('score');
       const leaderboardList = document.getElementById('leaderboard-list');
       // ===== Global Leaderboard (Supabase) =====
-// GitHub Pages is static. To get a shared leaderboard, we use Supabase (hosted database).
-// 1) Paste your Supabase Project URL + anon key here:
-const SUPABASE_URL = "https://xngzwbosbtzjhvelhoqb.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhuZ3p3Ym9zYnR6amh2ZWxob3FiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU5OTI5MjksImV4cCI6MjA4MTU2ODkyOX0.wsenjkwKbX4K2jTC9xTnw-FFStLtuMCxsAfPPIn9NRk";
-const SUPABASE_TABLE = "maze_leaderboard";
+      // GitHub Pages is static. For a shared leaderboard, connect to Supabase.
+      // Paste your Supabase Project URL + anon key here:
+      const SUPABASE_URL = "https://xngzwbosbtzjhvelhoqb.supabase.co";
+      const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhuZ3p3Ym9zYnR6amh2ZWxob3FiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU5OTI5MjksImV4cCI6MjA4MTU2ODkyOX0.wsenjkwKbX4K2jTC9xTnw-FFStLtuMCxsAfPPIn9NRk";
+      const SUPABASE_TABLE = "maze_leaderboard";
 
-// Keep localStorage as a fallback if Supabase isn't configured yet.
-const LEADERBOARD_KEY = 'stealthCryptoMazeLeaderboard';
+      // Local fallback (works even without Supabase):
+      const LEADERBOARD_KEY = 'stealthCryptoMazeLeaderboard';
 
-function sbConfigured() {
-  return SUPABASE_URL && SUPABASE_ANON_KEY &&
-    !SUPABASE_URL.includes("PUT_YOUR_") && !SUPABASE_ANON_KEY.includes("PUT_YOUR_");
-}
 
-function sbHeaders() {
-  return {
-    "apikey": SUPABASE_ANON_KEY,
-    "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
-    "Content-Type": "application/json",
-  };
-}
+      // Responsive sizing
+      function resizeCanvas() {
+        const size = Math.min(window.innerWidth - 32, 720);
+        canvas.style.width = size + 'px';
+        canvas.style.height = size + 'px';
+      }
+      window.addEventListener('resize', resizeCanvas);
+      resizeCanvas();
 
-async function fetchLeaderboardTop10() {
-  const url = `${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}?select=name,score,created_at&order=score.desc,created_at.asc&limit=10`;
-  const res = await fetch(url, { headers: sbHeaders() });
-  if (!res.ok) throw new Error(`Leaderboard fetch failed: ${res.status}`);
-  return await res.json();
-}
+      const rows = 21;
+      const cols = 21;
+      const cellSize = canvas.width / cols;
 
-async function submitScoreOnline({ name, score, referral_code }) {
-  const url = `${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}`;
-  const payload = [{
-    name,
-    score,
-    referral_code: referral_code || null,
-  }];
+      const eyesCount = 5;
+      const eyeStepInterval = 260; // ms per cell step
+      const detectionRadiusCells = 0.8; // smaller hitbox
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { ...sbHeaders(), "Prefer": "return=minimal" },
-    body: JSON.stringify(payload),
-  });
+      const DOT_PROBABILITY = 0.35;
+      const DOT_SCORE = 10;
+      const EXIT_BONUS = 50;
 
-  if (!res.ok) throw new Error(`Score submit failed: ${res.status}`);
-}
+      let grid = [];
+      let player = { r: 0, c: 0 };
+      let start = { r: 0, c: 0 };
+      let exit = { r: rows - 1, c: cols - 1 };
+      let eyes = [];
+      let dots = [];
+      let lastEyeStep = 0;
+      let gameState = 'playing'; // 'playing' | 'won' | 'lost'
+      let score = 0;
 
-function loadLeaderboard() {
-  try {
-    const raw = localStorage.getItem(LEADERBOARD_KEY);
-    if (!raw) return [];
-    const data = JSON.parse(raw);
-    return Array.isArray(data) ? data : [];
-  } catch (e) {
-    return [];
-  }
-}
+      // Leaderboard
 
-function saveLeaderboard(lb) {
-  try {
-    localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(lb));
-  } catch (e) {
-    // ignore
-  }
-}
+      function sbConfigured() {
+        return SUPABASE_URL && SUPABASE_ANON_KEY &&
+          !SUPABASE_URL.includes("PUT_YOUR_") && !SUPABASE_ANON_KEY.includes("PUT_YOUR_");
+      }
 
-async function refreshLeaderboardUI() {
-  if (!sbConfigured()) {
-    // Not configured yet, show local leaderboard so the game still works.
-    renderLeaderboard(loadLeaderboard());
-    return;
-  }
-  try {
-    const lb = await fetchLeaderboardTop10();
-    renderLeaderboard(lb);
-  } catch (e) {
-    console.warn(e);
-    // fallback to local
-    renderLeaderboard(loadLeaderboard());
-  }
-}
-// =======================================
+      function sbHeaders() {
+        return {
+          "apikey": SUPABASE_ANON_KEY,
+          "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+          "Content-Type": "application/json",
+        };
+      }
+
+      async function fetchLeaderboardTop10() {
+        const url = `${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}?select=name,score,created_at&order=score.desc,created_at.asc&limit=10`;
+        const res = await fetch(url, { headers: sbHeaders() });
+        if (!res.ok) throw new Error(`Leaderboard fetch failed: ${res.status}`);
+        return await res.json();
+      }
+
+      async function submitScoreOnline({ name, score, referral_code }) {
+        const url = `${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}`;
+        const payload = [{
+          name,
+          score,
+          referral_code: referral_code || null,
+        }];
+
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { ...sbHeaders(), "Prefer": "return=minimal" },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) throw new Error(`Score submit failed: ${res.status}`);
+      }
+
+      // Local fallback leaderboard
+      function loadLeaderboard() {
+        try {
+          const raw = localStorage.getItem(LEADERBOARD_KEY);
+          if (!raw) return [];
+          const data = JSON.parse(raw);
+          return Array.isArray(data) ? data : [];
+        } catch (e) {
+          return [];
+        }
+      }
+
+      function saveLeaderboard(lb) {
+        try {
+          localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(lb));
+        } catch (e) {}
+      }
+
+      async function refreshLeaderboardUI() {
+        // If Supabase isn't configured yet, use local leaderboard.
+        if (!sbConfigured()) {
+          const lb = loadLeaderboard();
+          renderLeaderboard(lb);
+          return;
+        }
+
+        try {
+          const lb = await fetchLeaderboardTop10();
+          renderLeaderboard(lb);
+        } catch (e) {
+          // If online leaderboard fails, fall back to local so the game still works.
+          const lb = loadLeaderboard();
+          renderLeaderboard(lb);
+          console.warn(e);
+        }
+      }
 
       function renderLeaderboard(lb) {
         leaderboardList.innerHTML = '';
@@ -533,26 +568,30 @@ async function refreshLeaderboardUI() {
           setMessage('Transfer complete. Your tokens moved privately. Score: ' + score, 'win');
           setTimeout(async () => {
             const name = (prompt('Enter your name for the leaderboard:', 'Anon') || '').trim().slice(0, 20);
-            if (name) {
-              const referral = (prompt('Pointless Referral Code (optional):', '') || '').trim().slice(0, 32);
+            if (!name) return;
 
-              // Always save locally so players don't lose their score even if offline.
-              leaderboard = loadLeaderboard();
-              leaderboard.push({ name, score, date: Date.now() });
-              leaderboard.sort((a, b) => b.score - a.score);
-              leaderboard = leaderboard.slice(0, 10);
-              saveLeaderboard(leaderboard);
+            const referral = (prompt('Pointless Referral Code (optional):', '') || '').trim().slice(0, 32);
 
-              // Try to submit online + refresh the global board.
-              if (sbConfigured()) {
-                try {
-                  await submitScoreOnline({ name, score, referral_code: referral || null });
-                } catch (e) {
-                  console.warn(e);
-                  // keep going; local save already happened
-                }
+            // If Supabase is configured, submit online. Otherwise, save locally.
+            if (sbConfigured()) {
+              try {
+                await submitScoreOnline({ name, score, referral_code: referral || null });
+                await refreshLeaderboardUI();
+              } catch (e) {
+                console.warn(e);
+                alert('Could not submit score right now. Saving locally instead.');
+                const lb = loadLeaderboard();
+                lb.push({ name, score, date: Date.now() });
+                lb.sort((a, b) => b.score - a.score);
+                saveLeaderboard(lb.slice(0, 10));
+                renderLeaderboard(lb.slice(0, 10));
               }
-              await refreshLeaderboardUI();
+            } else {
+              const lb = loadLeaderboard();
+              lb.push({ name, score, date: Date.now() });
+              lb.sort((a, b) => b.score - a.score);
+              saveLeaderboard(lb.slice(0, 10));
+              renderLeaderboard(lb.slice(0, 10));
             }
           }, 150);
         }
